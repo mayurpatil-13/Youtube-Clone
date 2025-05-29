@@ -4,6 +4,12 @@ import { User } from "../models/user.model.js";
 import { default_avatar_image_path } from "../constants.js";
 import { uploadToCloudnary } from "../utils/uploadToCloudnary.js";
 import { apiResponse } from '../utils/apiResponse.js';
+import jwt from "jsonwebtoken";
+
+const options ={
+    httpOnly: true,
+    secure: true
+}
 
 const generateAccessTokenAndRefreshToken = async (user) =>{
     const accessToken = user.generateAccessToken();
@@ -102,11 +108,6 @@ const loginUser = asyncHandler( async (req, res) => {
         '-password -refreshToken'
     )
 
-    const options ={
-        httpOnly: true,
-        secure: true
-    }
-
     return res
     .status(200)
     .cookie("accessToken", accessToken, options)
@@ -138,11 +139,6 @@ const logoutUser = asyncHandler( async (req, res) =>{
         }
     );
 
-    const options ={
-        httpOnly: true,
-        secure: true
-    }
-
     return res.status(200)
     .clearCookie("accessToken", options)
     .clearCookie("refreshToken", options)
@@ -152,8 +148,67 @@ const logoutUser = asyncHandler( async (req, res) =>{
 
 })
 
+const refreshAccessToken = asyncHandler( async(req,res) =>{
+    const incomingRefreshToken = req.cookie?.refreshToken || req.body.refreshToken;
+
+    if(!incomingRefreshToken){
+        throw new apiError(400, "unauthorized request");
+    }
+
+    try {
+        const decodedRefreshToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
+        const user = await User.findById(decodedRefreshToken._id);
+    
+        if(!user){
+            throw new apiError(400, "Invalid refresh token");
+        }
+
+        if(incomingRefreshToken != user.refreshToken){
+            throw new apiError(400, "Token is already expired or used");
+        }
+
+        const {accessToken, refreshToken} = generateAccessTokenAndRefreshToken(user);
+
+        return res.status(200)
+        .cookie("accessToken", accessToken)
+        .cookie("refreshToken", refreshToken)
+        .json(
+            new apiResponse(200, {
+                accessToken: accessToken,
+                refreshToken: refreshToken
+            }),
+            "access and refresh tokens are refreshed"
+        )
+
+    } catch (error) {
+        throw new apiError(401, error?.message || "invalid token request"
+        )
+    }
+})
+
+const changePassword = asyncHandler(async (req, res) =>{
+    const {oldPassword, newPassword} = req.body;
+
+    const user = await User.findById(req.user._id);
+    const isOldPasswordCorrect = await user.isPasswordCorrect(oldPassword);
+
+    if(!isOldPasswordCorrect){
+        throw new apiError(400, "Invlid old password");
+    }
+
+    user.password = newPassword;
+    await user.save({validateBeforeSave: false});
+
+    return res.status(200)
+    .json(
+        new apiResponse(200,{}, "passowrd changes successfully")
+    )   
+})
+
 export { 
     registerUser,
     loginUser,
-    logoutUser
+    logoutUser,
+    refreshAccessToken,
+    changePassword
  }
